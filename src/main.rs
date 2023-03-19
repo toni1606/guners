@@ -1,10 +1,13 @@
+use std::fmt::Debug;
 use std::time::Duration;
-use std::{fmt::Debug, time::Instant};
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Sample, SampleFormat,
 };
+use guners::find_closest_note;
+use rustfft::num_complex::Complex;
+use rustfft::FftPlanner;
 
 fn main() {
     // Get the defaul host (probably alsa).
@@ -45,13 +48,41 @@ fn main() {
     stream.play().expect("Could not start stream");
 
     // Performs the 500ms cycle 5 times.
-    for _ in 0..5 {
+    for _ in 0..50 {
         std::thread::sleep(Duration::from_millis(500));
-        println!("\n");
     }
 }
 
 // The function which takes each of the datapoints from the stream and performs operations on them.
-fn data_handler<T: Sample + Debug>(data: &[T], _: &cpal::InputCallbackInfo) {
-    println!("{:?}\tlen: {}", Instant::now(), data.len());
+fn data_handler<T: Sample + Debug + dasp_sample::conv::ToSample<f32>>(
+    data: &[T],
+    _: &cpal::InputCallbackInfo,
+) {
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_inverse(data.len() / 2);
+
+    let initial_len = data.len();
+    let mut data = data[..data.len() / 2]
+        .into_iter()
+        .map(|e| Complex {
+            re: e.to_sample(),
+            im: 0.0,
+        })
+        .collect::<Vec<_>>();
+    fft.process(&mut data);
+
+    let mut data = data.into_iter().map(|e| e.norm()).collect::<Vec<_>>();
+
+    for i in 0..(62 / (44100 / data.len())) {
+        data[i] = 0.0;
+    }
+
+    let (note, pitch) = find_closest_note(
+        data.iter()
+            .max_by(|x, y| x.abs().partial_cmp(&y.abs()).unwrap())
+            .unwrap()
+            * (44100 / initial_len) as f32,
+    );
+
+    print!("Closest note: {note:?} {pitch}\r");
 }
